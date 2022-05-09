@@ -16,6 +16,12 @@
  * source and destination files.  See the comments in transupp.c, or see
  * jpegtran.c for an example of correct usage.
  */
+/*
+ * Pixelization extension
+ *
+ * Copyright (C) 2022, Kame
+ * This file is modified for implement pixelization function extension.
+ */
 
 /* If you happen not to want the image transform support, disable it here */
 #ifndef TRANSFORMS_SUPPORTED
@@ -162,6 +168,37 @@ typedef struct {
   int iMCU_sample_height;
 } jpeg_transform_info;
 
+/*
+ * Pixelize parameters struct.
+ */
+typedef struct {
+  /* Pixelize parameters: application need not set these unless crop is TRUE.
+   * These can be filled in by jtransform_parse_crop_spec().
+   */
+  JDIMENSION crop_width;	/* Width of selected region */
+  JCROP_CODE crop_width_set;	/* (forced disables adjustment) */
+  JDIMENSION crop_height;	/* Height of selected region */
+  JCROP_CODE crop_height_set;	/* (forced disables adjustment) */
+  JDIMENSION crop_xoffset;	/* X offset of selected region */
+  JCROP_CODE crop_xoffset_set;	/* (negative measures from right edge) */
+  JDIMENSION crop_yoffset;	/* Y offset of selected region */
+  JCROP_CODE crop_yoffset_set;	/* (negative measures from bottom edge) */
+
+  /* Internal workspace: caller should not touch these */
+  JDIMENSION output_width;	/* cropped destination dimensions */
+  JDIMENSION output_height;
+  JDIMENSION x_crop_offset;	/* destination crop offsets measured in iMCUs */
+  JDIMENSION y_crop_offset;
+  JDIMENSION drop_width;	/* drop/wipe dimensions measured in iMCUs */
+  JDIMENSION drop_height;
+  int iMCU_sample_width;	/* destination iMCU size */
+  int iMCU_sample_height;
+
+  JDIMENSION pix_blk_ratio_x; /* Pixelized block width in MCU */
+  JDIMENSION pix_blk_ratio_y; /* Pixelized block width in MCU */
+  boolean blk_align; /* if TRUE, Pixelized block is aligned */
+} jpeg_pixelize_info;
+
 
 #if TRANSFORMS_SUPPORTED
 
@@ -188,6 +225,19 @@ EXTERN(boolean) jtransform_perfect_transform
 	JPP((JDIMENSION image_width, JDIMENSION image_height,
 	     int MCU_width, int MCU_height,
 	     JXFORM_CODE transform));
+
+/* Execute the pixelization */
+EXTERN(void) jtransform_execute_pixelize
+	JPP((j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+	     jvirt_barray_ptr *src_coef_arrays,
+	     jpeg_pixelize_info *info));
+/* Parse a pixelize specification (written in X11 geometry style) */
+EXTERN(boolean) jtransform_parse_pixelize_spec
+	JPP((jpeg_pixelize_info *info, const char *spec));
+/* Calculate internal parameters for pixelization */
+EXTERN(void) jtransform_prepare_pixelize
+	JPP((j_decompress_ptr srcinfo, jpeg_pixelize_info *info,
+          jpeg_transform_info *tinfo));
 
 /* jtransform_execute_transform used to be called
  * jtransform_execute_transformation, but some compilers complain about

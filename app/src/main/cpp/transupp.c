@@ -11,6 +11,12 @@
  * ease the task of maintaining jpegtran-like programs that have other user
  * interfaces.
  */
+/*
+ * Pixelization extension
+ *
+ * Copyright (C) 2022, Kame
+ * This file is modified for implement pixelization function extension.
+ */
 
 /* Although this file really shouldn't have access to the library internals,
  * it's helpful to let it call jround_up() and jcopy_block_row().
@@ -273,6 +279,7 @@ do_flatten (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
   }
 }
 
+
 /* Added for ajpegtran
  *  This function perform pixelize.
  *  Based on do_wipe() function above.
@@ -308,6 +315,86 @@ do_pixelize (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
           FMEMZERO(blktop+1, (DCTSIZE2-1) * SIZEOF(JCOEF));
         }
       }
+    }
+  }
+}
+
+/* Added for jpegtran extension
+ *  This function perform pixelize
+ *  Based on do_pixelize() function above.
+ *  This fucntion averag DC coefficients in pixelized block.
+ */
+LOCAL(void)
+do_pixelize2 (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+	 JDIMENSION x_crop_offset, JDIMENSION y_crop_offset,
+	 jvirt_barray_ptr *src_coef_arrays,
+	 JDIMENSION drop_width, JDIMENSION drop_height,
+	 JDIMENSION pix_blk_ratio_x, JDIMENSION pix_blk_ratio_y,
+	 boolean blk_align)
+{
+  JDIMENSION x_wipe_blocks, wipe_width;
+  JDIMENSION y_wipe_blocks, wipe_bottom;
+  int ci, offset_y,offset_x;
+  JBLOCKARRAY buffer;
+  jpeg_component_info *compptr;
+
+  int mcu_ratio_x, mcu_ratio_y;
+  int mcu_blk_x,mcu_blk_y;
+
+  mcu_ratio_x = pix_blk_ratio_x;
+  mcu_ratio_y = pix_blk_ratio_y;
+
+  for (ci = 0; ci < dstinfo->num_components; ci++) {
+    compptr = dstinfo->comp_info + ci;
+    x_wipe_blocks = x_crop_offset * compptr->h_samp_factor;
+    wipe_width = drop_width * compptr->h_samp_factor;
+    y_wipe_blocks = y_crop_offset * compptr->v_samp_factor;
+    wipe_bottom = drop_height * compptr->v_samp_factor + y_wipe_blocks;
+
+    mcu_blk_x = compptr->h_samp_factor * mcu_ratio_x; 
+    mcu_blk_y = compptr->v_samp_factor * mcu_ratio_y; 
+    JDIMENSION wipe_height = drop_height * compptr->v_samp_factor;
+    int step_x=mcu_blk_x,step_y=mcu_blk_y;
+    int start_x=0,start_y=0;
+    if( blk_align ){
+      /* Block Align mode */
+      start_y = y_wipe_blocks % mcu_blk_y;
+      step_y = mcu_blk_y - start_y;
+    }
+
+    for (offset_y = 0; offset_y < wipe_height; offset_y+=step_y) {
+      if( offset_y ) step_y = mcu_blk_y;
+      if( blk_align ){
+	/* Block Align mode */
+	start_x = x_wipe_blocks % mcu_blk_x;
+	step_x = mcu_blk_x - start_x;
+      }
+      for (offset_x = x_wipe_blocks; offset_x < x_wipe_blocks+wipe_width; offset_x+=step_x) {
+	int ave=0,num=0;
+	if( offset_x > x_wipe_blocks ) step_x = mcu_blk_x;
+	for( int local_y = 0 ; local_y<step_y && offset_y+local_y < wipe_height ; local_y++ ){
+	  buffer = (*srcinfo->mem->access_virt_barray)
+	    ((j_common_ptr) srcinfo, src_coef_arrays[ci], y_wipe_blocks+offset_y+local_y,
+	    (JDIMENSION) 1, TRUE);
+	  for( int local_x = 0 ; local_x<step_x && offset_x+local_x < x_wipe_blocks+wipe_width ; local_x++ ){
+            JCOEF *blktop = buffer[0][offset_x+local_x];
+	    ave += blktop[0];
+	    num++;
+            FMEMZERO(blktop+1, (DCTSIZE2-1) * SIZEOF(JCOEF));
+	  }
+	}
+	ave /= num;
+	for( int local_y = 0 ; local_y<step_y && offset_y+local_y < wipe_height ; local_y++ ){
+	  buffer = (*srcinfo->mem->access_virt_barray)
+	    ((j_common_ptr) srcinfo, src_coef_arrays[ci], y_wipe_blocks+offset_y+local_y,
+	    (JDIMENSION) 1, TRUE);
+	  for( int local_x = 0 ; local_x<step_x && offset_x+local_x < x_wipe_blocks+wipe_width ; local_x++ ){
+	    buffer[0][offset_x+local_x][0] = ave;
+	  }
+	}
+        start_x = 0;
+      }
+      start_y = 0;
     }
   }
 }
@@ -1032,6 +1119,80 @@ jtransform_parse_crop_spec (jpeg_transform_info *info, const char *spec)
   return TRUE;
 }
 
+/* Parse a crop specification (written in X11 geometry style).
+ * The routine returns TRUE if the spec string is valid, FALSE if not.
+ *
+ * The crop spec string should have the format
+ *	<width>[f]x<height>[f]{+-}<xoffset>{+-}<yoffset>
+ * where width, height, xoffset, and yoffset are unsigned integers.
+ * Each of the elements can be omitted to indicate a default value.
+ * (A weakness of this style is that it is not possible to omit xoffset
+ * while specifying yoffset, since they look alike.)
+ *
+ * This code is loosely based on XParseGeometry from the X11 distribution.
+ */
+
+GLOBAL(boolean)
+jtransform_parse_pixelize_spec (jpeg_pixelize_info *info, const char *spec)
+{
+  info->crop_width_set = JCROP_UNSET;
+  info->crop_height_set = JCROP_UNSET;
+  info->crop_xoffset_set = JCROP_UNSET;
+  info->crop_yoffset_set = JCROP_UNSET;
+  info->pix_blk_ratio_x = 1;
+  info->pix_blk_ratio_y = 1;
+  info->blk_align = FALSE;
+
+  if (isdigit(*spec)) {
+    /* fetch width */
+    if (! jt_read_integer(&spec, &info->crop_width))
+      return FALSE;
+    info->crop_width_set = JCROP_POS;
+  }
+  if (*spec == 'x' || *spec == 'X') {
+    /* fetch height */
+    spec++;
+    if (! jt_read_integer(&spec, &info->crop_height))
+      return FALSE;
+    info->crop_height_set = JCROP_POS;
+  }
+  if (*spec == '+' || *spec == '-') {
+    /* fetch xoffset */
+    info->crop_xoffset_set = (*spec == '-') ? JCROP_NEG : JCROP_POS;
+    spec++;
+    if (! jt_read_integer(&spec, &info->crop_xoffset))
+      return FALSE;
+  }
+  if (*spec == '+' || *spec == '-') {
+    /* fetch yoffset */
+    info->crop_yoffset_set = (*spec == '-') ? JCROP_NEG : JCROP_POS;
+    spec++;
+    if (! jt_read_integer(&spec, &info->crop_yoffset))
+      return FALSE;
+  }
+  if (*spec == '@') {
+    /* fetch pixelize size x */
+    spec++;
+    if (! jt_read_integer(&spec, &info->pix_blk_ratio_x))
+      return FALSE;
+  }
+  if (*spec == '@') {
+    /* fetch pixelize size y */
+    spec++;
+    if (! jt_read_integer(&spec, &info->pix_blk_ratio_y))
+      return FALSE;
+  }
+  if (*spec == 'A' || *spec == 'a') {
+    /* fetch align flag */
+    spec++;
+    info->blk_align = TRUE;
+  }
+  /* We had better have gotten to the end of the string. */
+  if (*spec != '\0')
+    return FALSE;
+  return TRUE;
+}
+
 
 /* Trim off any partial iMCUs on the indicated destination edge */
 
@@ -1359,6 +1520,147 @@ jtransform_request_workspace (j_decompress_ptr srcinfo,
   return TRUE;
 }
 
+/* Prepare paramters for pixelization
+ *  Added for jpegtran_extension
+ */
+GLOBAL(void)
+jtransform_prepare_pixelize (j_decompress_ptr srcinfo,
+			      jpeg_pixelize_info *info,
+			      jpeg_transform_info *tinfo)
+{
+  //jvirt_barray_ptr *coef_arrays;
+  //boolean need_workspace, transpose_it;
+  //jpeg_component_info *compptr;
+  JDIMENSION xoffset, yoffset;
+  //JDIMENSION width_in_iMCUs, height_in_iMCUs;
+  //JDIMENSION width_in_blocks, height_in_blocks;
+  //int ci, h_samp_factor, v_samp_factor;
+
+  /* Pixelization is exclusive of another transformation */
+  if (tinfo->crop || tinfo->transform != JXFORM_NONE) {
+    ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+  }
+
+  /* Compute output image dimensions and related values. */
+  // jpeg_core_output_dimensions(srcinfo);
+
+  /* If there is only one output component, force the iMCU size to be 1;
+   * else use the source iMCU size.  (This allows us to do the right thing
+   * when reducing color to grayscale, and also provides a handy way of
+   * cleaning up "funny" grayscale images whose sampling factors are not 1x1.)
+   */
+  {
+    if (tinfo->num_components == 1) {
+      info->iMCU_sample_width = srcinfo->min_DCT_h_scaled_size;
+      info->iMCU_sample_height = srcinfo->min_DCT_v_scaled_size;
+    } else {
+      info->iMCU_sample_width =
+	srcinfo->max_h_samp_factor * srcinfo->min_DCT_h_scaled_size;
+      info->iMCU_sample_height =
+	srcinfo->max_v_samp_factor * srcinfo->min_DCT_v_scaled_size;
+    }
+  }
+
+  {
+    info->output_width = srcinfo->output_width;
+    info->output_height = srcinfo->output_height;
+    if (tinfo->num_components == 1) {
+      info->iMCU_sample_width = srcinfo->min_DCT_h_scaled_size;
+      info->iMCU_sample_height = srcinfo->min_DCT_v_scaled_size;
+    } else {
+      info->iMCU_sample_width =
+	srcinfo->max_h_samp_factor * srcinfo->min_DCT_h_scaled_size;
+      info->iMCU_sample_height =
+	srcinfo->max_v_samp_factor * srcinfo->min_DCT_v_scaled_size;
+    }
+  }
+
+  if (srcinfo->max_h_samp_factor * info->pix_blk_ratio_x *
+      srcinfo->max_v_samp_factor * info->pix_blk_ratio_y
+      > 65536 ||
+      info->pix_blk_ratio_x > 256 ||
+      info->pix_blk_ratio_y > 256) {
+    ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+  }
+
+  /* Compute the crop area's position and
+   * dimensions, ensuring that its upper left corner falls at an iMCU boundary.
+   */
+  {
+    /* Insert default values for unset crop parameters */
+    if (info->crop_xoffset_set == JCROP_UNSET)
+      info->crop_xoffset = 0;	/* default to +0 */
+    if (info->crop_yoffset_set == JCROP_UNSET)
+      info->crop_yoffset = 0;	/* default to +0 */
+    if (info->crop_width_set == JCROP_UNSET) {
+      if (info->crop_xoffset >= info->output_width) {
+	ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+      }
+      info->crop_width = info->output_width - info->crop_xoffset;
+    } else {
+      /* Check for crop extension */
+      if (info->crop_width > info->output_width) {
+	/* Crop extension does not work when transforming! */
+	printf("1 %d %d\n",info->crop_width , info->output_width);
+	ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+      } else {
+	if (info->crop_xoffset >= info->output_width ||
+	    info->crop_width <= 0 ||
+	    info->crop_xoffset > info->output_width - info->crop_width) {
+	  printf("2\n");
+	  ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+	}
+      }
+    }
+    if (info->crop_height_set == JCROP_UNSET) {
+      if (info->crop_yoffset >= info->output_height){
+	printf("3\n");
+	ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+      }
+      info->crop_height = info->output_height - info->crop_yoffset;
+    } else {
+      /* Check for crop extension */
+      if (info->crop_height > info->output_height) {
+	/* Crop extension does not work when transforming! */
+	printf("4\n");
+	ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+      } else {
+	if (info->crop_yoffset >= info->output_height ||
+	    info->crop_height <= 0 ||
+	    info->crop_yoffset > info->output_height - info->crop_height) {
+	  printf("5\n");
+	  ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
+	}
+      }
+    }
+    /* Convert negative crop offsets into regular offsets */
+    if (info->crop_xoffset_set != JCROP_NEG)
+      xoffset = info->crop_xoffset;
+    else if (info->crop_width > info->output_width) /* crop extension */
+      xoffset = info->crop_width - info->output_width - info->crop_xoffset;
+    else
+      xoffset = info->output_width - info->crop_width - info->crop_xoffset;
+    if (info->crop_yoffset_set != JCROP_NEG)
+      yoffset = info->crop_yoffset;
+    else if (info->crop_height > info->output_height) /* crop extension */
+      yoffset = info->crop_height - info->output_height - info->crop_yoffset;
+    else
+      yoffset = info->output_height - info->crop_height - info->crop_yoffset;
+    /* Now adjust so that upper left corner falls at an iMCU boundary */
+    {
+      /* Ensure the effective wipe region will cover the requested */
+      info->drop_width = (JDIMENSION) jdiv_round_up
+	((long) (info->crop_width + (xoffset % info->iMCU_sample_width)),
+	 (long) info->iMCU_sample_width);
+      info->drop_height = (JDIMENSION) jdiv_round_up
+	((long) (info->crop_height + (yoffset % info->iMCU_sample_height)),
+	 (long) info->iMCU_sample_height);
+    }
+    /* Save x/y offsets measured in iMCUs */
+    info->x_crop_offset = xoffset / info->iMCU_sample_width;
+    info->y_crop_offset = yoffset / info->iMCU_sample_height;
+  }
+}
 
 /* Transpose destination image parameters */
 
@@ -2077,6 +2379,36 @@ jtransform_execute_transform (j_decompress_ptr srcinfo,
     do_pixelize(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
 	      src_coef_arrays, info->drop_width, info->drop_height);
     break;
+  }
+}
+
+/* Execute the actual transformation, if any.
+ *
+ * This must be called *after* jpeg_write_coefficients, because it depends
+ * on jpeg_write_coefficients to have computed subsidiary values such as
+ * the per-component width and height fields in the destination object.
+ *
+ * Note that some transformations will modify the source data arrays!
+ */
+
+GLOBAL(void)
+jtransform_execute_pixelize (j_decompress_ptr srcinfo,
+			      j_compress_ptr dstinfo,
+			      jvirt_barray_ptr *src_coef_arrays,
+			      jpeg_pixelize_info *info)
+{
+  /* Note: conditions tested here should match those in switch statement
+   * in jtransform_request_workspace()
+   */
+  if( info->pix_blk_ratio_x ){
+    do_pixelize2(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
+		 src_coef_arrays, info->drop_width, info->drop_height,
+		 info->pix_blk_ratio_x,info->pix_blk_ratio_y,
+		 info->blk_align);
+  }
+  else{
+    do_pixelize(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
+		src_coef_arrays, info->drop_width, info->drop_height);
   }
 }
 

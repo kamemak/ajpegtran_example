@@ -11,6 +11,12 @@
  * through JNI (Java Native Interface).
  * This file is modified from jpegtran.c which is for command line interface.
  */
+/*
+ * Pixelization extension
+ *
+ * Copyright (C) 2022, Kame
+ * This file is modified for implement pixelization function extension.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +84,11 @@ char errmsgbuffer[JMSG_LENGTH_MAX];
 int coeff_adj;
 int coeff_offset[4];
 int monochrome;
+/* Added for pixelization extension
+ */
+#define PIXELIZE_INFO_SIZE 8
+int pixelizenum;
+static jpeg_pixelize_info pixelizeinfo[PIXELIZE_INFO_SIZE]; /* pixelize infos */
 
 LOCAL(void)
 select_transform (JXFORM_CODE transform)
@@ -359,12 +370,14 @@ parse_switches (j_compress_ptr cinfo, char *argstr,
 	strcpy(errmsgbuffer,"Parse error:missed parameter(pixelize)");
 	return 0;
       }
-      if (transformoption.crop /* reject multiple crop/wipe/pixelize requests */ ||
-	  ! jtransform_parse_crop_spec(&transformoption, arg2)) {
+      if (for_real)
+	continue;
+      if (pixelizenum>=PIXELIZE_INFO_SIZE ||
+	  ! jtransform_parse_pixelize_spec(pixelizeinfo+pixelizenum++, arg2)) {
+	/* reject illegale requests */
 	strcpy(errmsgbuffer,"Parse error:argument(pixelize)");
 	return 0;
       }
-      select_transform(JXFORM_PIXELIZE);
 #else
       select_transform(JXFORM_NONE);	/* force an error */
 #endif
@@ -607,6 +620,9 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
       longjmp(jbuf,1);
     }
 #endif
+    for (int cnt=0;cnt<pixelizenum;cnt++) {
+      jtransform_prepare_pixelize(&srcinfo, pixelizeinfo+cnt, &transformoption);
+    }
 
     /* Read source file as DCT coefficients */
     src_coef_arrays = jpeg_read_coefficients(&srcinfo);
@@ -660,7 +676,11 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
 				    src_coef_arrays,
 				    &transformoption);
 #endif
-
+    for (int cnt=0;cnt<pixelizenum;cnt++) {
+      jtransform_execute_pixelize(&srcinfo, &dstinfo,
+				      src_coef_arrays,
+				      pixelizeinfo+cnt);
+    }
     /* Finish compression and release memory */
     jpeg_finish_compress(&dstinfo);
     (void) jpeg_finish_decompress(&srcinfo);
