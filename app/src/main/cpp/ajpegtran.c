@@ -86,7 +86,7 @@ int coeff_offset[4];
 int monochrome;
 /* Added for pixelization extension
  */
-#define PIXELIZE_INFO_SIZE 8
+#define PIXELIZE_INFO_SIZE 16
 int pixelizenum;
 static jpeg_pixelize_info pixelizeinfo[PIXELIZE_INFO_SIZE]; /* pixelize infos */
 
@@ -508,7 +508,7 @@ void brightnessControl(
   return;
 }
 
-#define OPTTEMP_SIZE 256
+#define OPTTEMP_SIZE 1024
 /**
  * ajpegtran main entry.
  *
@@ -550,6 +550,7 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
   coeff_offset[2] = 0;
   coeff_offset[3] = 0;
   errmsgbuffer[0]='\0';
+  pixelizenum = 0;
 
   /* Note for ajpegtran
    *  Clear errno to get I/O error.
@@ -587,6 +588,7 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
     }
     strcpy(opttemp,optstr);
     parseResult = parse_switches(&dstinfo, opttemp, 0, FALSE);
+    strcpy(opttemp,optstr);
     (*env)->ReleaseStringUTFChars(env, jOptions, optstr);
     if ( !parseResult ){
       longjmp(jbuf,1);
@@ -637,6 +639,12 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
       brightnessControl(&srcinfo,src_coef_arrays);
     }
 
+    for (int cnt=0;cnt<pixelizenum;cnt++) {
+      jtransform_execute_pixelize(&srcinfo,
+				      src_coef_arrays,
+				      pixelizeinfo+cnt);
+    }
+
     /* Initialize destination compression parameters from source values */
     jpeg_copy_critical_parameters(&srcinfo, &dstinfo);
 
@@ -661,6 +669,11 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
     close(rfd);
     rfd = -1;
 
+    parseResult = parse_switches(&dstinfo, opttemp, 0, TRUE);
+    if ( !parseResult ){
+      longjmp(jbuf,1);
+    }
+
     /* Specify data destination for compression */
     jpeg_stdio_dest(&dstinfo, wfd);
 
@@ -676,11 +689,7 @@ Java_github_kamemak_ajpegtran_1example_MainActivity_ajpegtran( JNIEnv* env,
 				    src_coef_arrays,
 				    &transformoption);
 #endif
-    for (int cnt=0;cnt<pixelizenum;cnt++) {
-      jtransform_execute_pixelize(&srcinfo, &dstinfo,
-				      src_coef_arrays,
-				      pixelizeinfo+cnt);
-    }
+
     /* Finish compression and release memory */
     jpeg_finish_compress(&dstinfo);
     (void) jpeg_finish_decompress(&srcinfo);

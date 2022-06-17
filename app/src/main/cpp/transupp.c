@@ -279,14 +279,13 @@ do_flatten (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
   }
 }
 
-
 /* Added for ajpegtran
  *  This function perform pixelize.
  *  Based on do_wipe() function above.
  *  This fucntion clear AC coefficients only, whereas do_wipe() clear all coefficient.
  */
 LOCAL(void)
-do_pixelize (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+do_pixelize (j_decompress_ptr srcinfo,
 	 JDIMENSION x_crop_offset, JDIMENSION y_crop_offset,
 	 jvirt_barray_ptr *src_coef_arrays,
 	 JDIMENSION drop_width, JDIMENSION drop_height)
@@ -298,8 +297,8 @@ do_pixelize (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
   JBLOCKARRAY buffer;
   jpeg_component_info *compptr;
 
-  for (ci = 0; ci < dstinfo->num_components; ci++) {
-    compptr = dstinfo->comp_info + ci;
+  for (ci = 0; ci < srcinfo->num_components; ci++) {
+    compptr = srcinfo->comp_info + ci;
     x_wipe_blocks = x_crop_offset * compptr->h_samp_factor;
     wipe_width = drop_width * compptr->h_samp_factor;
     y_wipe_blocks = y_crop_offset * compptr->v_samp_factor;
@@ -325,7 +324,7 @@ do_pixelize (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
  *  This fucntion averag DC coefficients in pixelized block.
  */
 LOCAL(void)
-do_pixelize2 (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+do_pixelize2 (j_decompress_ptr srcinfo,
 	 JDIMENSION x_crop_offset, JDIMENSION y_crop_offset,
 	 jvirt_barray_ptr *src_coef_arrays,
 	 JDIMENSION drop_width, JDIMENSION drop_height,
@@ -344,8 +343,8 @@ do_pixelize2 (j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
   mcu_ratio_x = pix_blk_ratio_x;
   mcu_ratio_y = pix_blk_ratio_y;
 
-  for (ci = 0; ci < dstinfo->num_components; ci++) {
-    compptr = dstinfo->comp_info + ci;
+  for (ci = 0; ci < srcinfo->num_components; ci++) {
+    compptr = srcinfo->comp_info + ci;
     x_wipe_blocks = x_crop_offset * compptr->h_samp_factor;
     wipe_width = drop_width * compptr->h_samp_factor;
     y_wipe_blocks = y_crop_offset * compptr->v_samp_factor;
@@ -1536,11 +1535,6 @@ jtransform_prepare_pixelize (j_decompress_ptr srcinfo,
   //JDIMENSION width_in_blocks, height_in_blocks;
   //int ci, h_samp_factor, v_samp_factor;
 
-  /* Pixelization is exclusive of another transformation */
-  if (tinfo->crop || tinfo->transform != JXFORM_NONE) {
-    ERREXIT(srcinfo, JERR_BAD_CROP_SPEC);
-  }
-
   /* Compute output image dimensions and related values. */
   // jpeg_core_output_dimensions(srcinfo);
 
@@ -2372,13 +2366,6 @@ jtransform_execute_transform (j_decompress_ptr srcinfo,
       do_flatten(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
 		 src_coef_arrays, info->drop_width, info->drop_height);
     break;
-  /* Added for ajpegtran
-   *  When option is specified, call the pixelize function.
-   */
-  case JXFORM_PIXELIZE:
-    do_pixelize(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
-	      src_coef_arrays, info->drop_width, info->drop_height);
-    break;
   }
 }
 
@@ -2393,7 +2380,6 @@ jtransform_execute_transform (j_decompress_ptr srcinfo,
 
 GLOBAL(void)
 jtransform_execute_pixelize (j_decompress_ptr srcinfo,
-			      j_compress_ptr dstinfo,
 			      jvirt_barray_ptr *src_coef_arrays,
 			      jpeg_pixelize_info *info)
 {
@@ -2401,13 +2387,13 @@ jtransform_execute_pixelize (j_decompress_ptr srcinfo,
    * in jtransform_request_workspace()
    */
   if( info->pix_blk_ratio_x ){
-    do_pixelize2(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
+    do_pixelize2(srcinfo, info->x_crop_offset, info->y_crop_offset,
 		 src_coef_arrays, info->drop_width, info->drop_height,
 		 info->pix_blk_ratio_x,info->pix_blk_ratio_y,
 		 info->blk_align);
   }
   else{
-    do_pixelize(srcinfo, dstinfo, info->x_crop_offset, info->y_crop_offset,
+    do_pixelize(srcinfo, info->x_crop_offset, info->y_crop_offset,
 		src_coef_arrays, info->drop_width, info->drop_height);
   }
 }

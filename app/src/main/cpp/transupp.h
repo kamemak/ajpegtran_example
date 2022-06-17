@@ -228,7 +228,7 @@ EXTERN(boolean) jtransform_perfect_transform
 
 /* Execute the pixelization */
 EXTERN(void) jtransform_execute_pixelize
-	JPP((j_decompress_ptr srcinfo, j_compress_ptr dstinfo,
+	JPP((j_decompress_ptr srcinfo,
 	     jvirt_barray_ptr *src_coef_arrays,
 	     jpeg_pixelize_info *info));
 /* Parse a pixelize specification (written in X11 geometry style) */
